@@ -1,0 +1,43 @@
+model:
+  roi: 96
+  infer_overlap: 0.6
+  architecture: segres_net
+dataset:
+  irl_pc: /media/faizan/2418a65c-11bc-4f64-bf23-ecd60d93cf53/faizan/Faizan_thesis/dataset
+  laptop_pc: C:\Users\chand\BrainTumorProject\dataset
+  colab: /gdrive/MyDrive/BraTS2023/
+  sines_pc: /drive/faizanai.rrl/datasets
+  dataset_folder: null
+  version: brats2023
+  type: brats
+  patient_id: E:/Brats23 Data/Dataset/BraTS23_mapped/dataset/brats2023
+  save_dir: paper_figs/exp1/modalities
+training:
+  batch_size: 1
+  num_workers: 0
+  infer_overlap: 0.6
+  learning_rate: 0.0001
+  max_epochs: 1
+  sw_batch_size: 2
+  val_every: 1
+  weight_decay: 1.0e-05
+  solver_name: Adam
+  loss_type: dice
+  pretrained: false
+  resume: false
+  exp_name: segres_net_runs
+  seed: 123
+  colab: false
+  irl: false
+  sines: false
+  my_pc: true
+  new_max_epochs: None
+test:
+  weights: null
+  tta: true
+  sw_batch: 2
+  batch: 1
+  infer_overlap: 0.6
+  workers: 12
+  csv_folder: csv
+  label_folder: null

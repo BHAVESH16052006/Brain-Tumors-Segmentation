@@ -55,12 +55,31 @@ def listdir(path):
     return files_list
     
 def save_test_label(args, patient_id, predict):
-    data_path = get_brats_folder(mode="test")
-    ref_img = sitk.ReadImage(os.path.join(data_path, f"{patient_id}/{patient_id}_t1.nii.gz"))
+    data_path = get_brats_folder(
+        args.dataset.irl_pc,
+        mode="test",
+        version=args.dataset.version
+    )
+
+    ref_img = sitk.ReadImage(
+        os.path.join(
+            data_path,
+            f"{patient_id}/{patient_id}-t1n.nii.gz"
+        )
+    )
+
     label_nii = sitk.GetImageFromArray(predict)
     label_nii.CopyInformation(ref_img)
-    sitk.WriteImage(label_nii, os.path.join(args.label_folder, f"{patient_id}.nii.gz"))
 
+    os.makedirs(args.test.label_folder, exist_ok=True)
+
+    sitk.WriteImage(
+        label_nii,
+        os.path.join(
+            args.test.label_folder,
+            f"{patient_id}-t1n.nii.gz"
+        )
+    )
 class AverageMeter(object):
     def __init__(self, name, fmt):
         self.name = name

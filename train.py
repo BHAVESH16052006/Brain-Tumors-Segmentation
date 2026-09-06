@@ -22,6 +22,7 @@ import tqdm as tqdm
 from utils.meter import AverageMeter
 from utils.general import save_checkpoint, load_pretrained_model, resume_training
 from brats import get_datasets
+from datetime import datetime, timedelta
 
 from monai.data import  decollate_batch
 import torch
@@ -141,71 +142,428 @@ def init_random(seed):
     cudnn.deterministic = True
 
 # Train for an epoch
-def train_epoch(model, loader, optimizer, loss_func, augment = True):
+# Train for an epoch
+# Train for an epoch
+def train_epoch(model, loader, optimizer, loss_func, augment=True):
     """
-    train the model for epoch on MRI image and given ground truth labels
-    using set of arguments
-    
-    Parameters
-    ----------
-    model: nn.Module
-    loader: torch.utils.data.Dataset
-    optimizer: torch.optim.adamw.AdamW
-    loss_func: monai.losses.dice.DiceLoss
-    epoch: int
+    Train the model for one epoch.
+
+    Shows:
+    - Progress
+    - Batch number
+    - Percentage
+    - Loss
+    - Elapsed time
+    - ETA
+    - Start time
+    - Finish time
     """
-    # dyn_loss = LossBraTS(focal=False)
+
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
     augmenter = DataAugmenter().to(device)
+
     torch.cuda.empty_cache()
     gc.collect()
-    # del variables
-    model.train() 
+
+    model.train()
+
     run_loss = AverageMeter()
-    for batch_data in loader:
-        image, label = batch_data["image"].to(device), batch_data["label"].to(device)
-        image, label = augmenter(image, label) if augment else (image, label)
+
+    # ============================================================
+    # START TIME
+    # ============================================================
+    start_time = time.time()
+
+    # IMPORTANT:
+    # Your file uses "import datetime", therefore:
+    start_datetime = datetime.now()
+
+    print()
+    print("=" * 80)
+    print("STARTING TRAINING EPOCH")
+    print("=" * 80)
+    print("Start time :", start_datetime.strftime("%Y-%m-%d %H:%M:%S"))
+    print("Total batches:", len(loader))
+    print("Device:", device)
+
+    if torch.cuda.is_available():
+        print("GPU:", torch.cuda.get_device_name(0))
+
+    print("=" * 80)
+    print()
+
+    # ============================================================
+    # TRAINING LOOP
+    # ============================================================
+    for batch_idx, batch_data in enumerate(loader):
+
+        # --------------------------------------------------------
+        # Load image and label
+        # --------------------------------------------------------
+        image = batch_data["image"].to(device)
+        label = batch_data["label"].to(device)
+
+        # --------------------------------------------------------
+        # Data augmentation
+        # --------------------------------------------------------
+        if augment:
+            image, label = augmenter(image, label)
+
+        # --------------------------------------------------------
+        # Forward pass
+        # --------------------------------------------------------
         logits = model(image)
-        loss = loss_func(logits, label) 
+
+        # --------------------------------------------------------
+        # Loss
+        # --------------------------------------------------------
+        loss = loss_func(logits, label)
+
+        # --------------------------------------------------------
+        # Backward pass
+        # --------------------------------------------------------
         loss.backward()
+
+        # --------------------------------------------------------
+        # Optimizer
+        # --------------------------------------------------------
         optimizer.step()
         optimizer.zero_grad()
-        run_loss.update(loss.item(), n = batch_data["image"].shape[0])
+
+        # --------------------------------------------------------
+        # Update average loss
+        # --------------------------------------------------------
+        run_loss.update(
+            loss.item(),
+            n=batch_data["image"].shape[0]
+        )
+
+        # ========================================================
+        # PROGRESS INFORMATION
+        # ========================================================
+        current_batch = batch_idx + 1
+        total_batches = len(loader)
+
+        percent = current_batch / total_batches * 100
+
+        elapsed_seconds = time.time() - start_time
+
+        # Average time per batch
+        avg_time_per_batch = elapsed_seconds / current_batch
+
+        # Estimated remaining time
+        remaining_batches = total_batches - current_batch
+        remaining_seconds = avg_time_per_batch * remaining_batches
+
+        # --------------------------------------------------------
+        # Convert times
+        # --------------------------------------------------------
+        elapsed_minutes = int(elapsed_seconds // 60)
+        elapsed_secs = int(elapsed_seconds % 60)
+
+        eta_minutes = int(remaining_seconds // 60)
+        eta_secs = int(remaining_seconds % 60)
+
+        # --------------------------------------------------------
+        # Progress bar
+        # --------------------------------------------------------
+        bar_length = 40
+
+        filled_length = int(
+            bar_length * current_batch / total_batches
+        )
+
+        bar = "█" * filled_length + "-" * (
+            bar_length - filled_length
+        )
+
+        # --------------------------------------------------------
+        # Print progress
+        # --------------------------------------------------------
+        print(
+            f"\r[{bar}] "
+            f"{current_batch}/{total_batches} "
+            f"({percent:6.2f}%) "
+            f"Loss: {loss.item():.4f} "
+            f"Elapsed: {elapsed_minutes:02d}:{elapsed_secs:02d} "
+            f"ETA: {eta_minutes:02d}:{eta_secs:02d}",
+            end="",
+            flush=True
+        )
+
+    # ============================================================
+    # END TIME
+    # ============================================================
+    end_time = time.time()
+
+    end_datetime = datetime.now()
+
+    total_seconds = end_time - start_time
+
+    total_hours = int(total_seconds // 3600)
+    total_minutes = int((total_seconds % 3600) // 60)
+    total_secs = int(total_seconds % 60)
+
+    # ============================================================
+    # FINISHED
+    # ============================================================
+    print()
+    print()
+    print("=" * 80)
+    print("EPOCH TRAINING COMPLETED")
+    print("=" * 80)
+
+    print(
+        "Start time :",
+        start_datetime.strftime("%Y-%m-%d %H:%M:%S")
+    )
+
+    print(
+        "Finish time:",
+        end_datetime.strftime("%Y-%m-%d %H:%M:%S")
+    )
+
+    print(
+        "Total time : "
+        f"{total_hours:02d}:{total_minutes:02d}:{total_secs:02d}"
+    )
+
+    print(
+        "Average loss:",
+        f"{run_loss.avg:.4f}"
+    )
+
+    print("=" * 80)
+    print()
+
+    # ============================================================
+    # FREE GPU CACHE
+    # ============================================================
     torch.cuda.empty_cache()
+    gc.collect()
+
+    # VERY IMPORTANT
     return run_loss.avg
 
 # Validate the model
-def val(model, loader, acc_func, model_inferer = None,
-        post_sigmoid = None, post_pred = None, post_label=None):
+# Validate the model
+def val(model, loader, acc_func, model_inferer=None,
+        post_sigmoid=None, post_pred=None, post_label=None):
     """
-    Validation phase
-    use model and validation dataset to validate the model performance on 
-    validation dataset.
+    Validation phase with progress bar.
 
-    Parameters
-    ----------
-    model: nn.Module
-    loader: torch.util.data.Dataset
-    acc_func: monai.metrics.meandice.DiceMetric 
-    num_epochs: int
-    epochs: int
-    model_inferer: nn.Module
-    post_sigmoid: monai.transforms.post.array.Activations
-    post_pred:monai.transforms.post.array.AsDiscrete
+    Shows:
+    - Validation patient/batch number
+    - Percentage
+    - Elapsed time
+    - ETA
     """
+
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
     model.eval()
+
     run_acc = AverageMeter()
+
+    # ============================================================
+    # VALIDATION START TIME
+    # ============================================================
+    start_time = time.time()
+    start_datetime = datetime.now()
+
+    total_batches = len(loader)
+
+    print()
+    print("=" * 80)
+    print("STARTING VALIDATION")
+    print("=" * 80)
+    print("Start time :", start_datetime.strftime("%Y-%m-%d %H:%M:%S"))
+    print("Total validation batches:", total_batches)
+    print("Device:", device)
+
+    if torch.cuda.is_available():
+        print("GPU:", torch.cuda.get_device_name(0))
+
+    print("=" * 80)
+    print()
+
+    # ============================================================
+    # VALIDATION LOOP
+    # ============================================================
     with torch.no_grad():
-        for batch_data in loader:
-            logits = model_inferer(batch_data["image"].to(device))
-            masks = decollate_batch(batch_data["label"].to(device)) 
+
+        for batch_idx, batch_data in enumerate(loader):
+
+            # ----------------------------------------------------
+            # Move image to GPU
+            # ----------------------------------------------------
+            image = batch_data["image"].to(device)
+
+            # ----------------------------------------------------
+            # Model inference
+            # ----------------------------------------------------
+            logits = model_inferer(image)
+
+            # ----------------------------------------------------
+            # Prepare labels
+            # ----------------------------------------------------
+            masks = decollate_batch(
+                batch_data["label"].to(device)
+            )
+
             prediction_lists = decollate_batch(logits)
-            predictions = [post_pred(post_sigmoid(prediction)) for prediction in prediction_lists]
+
+            # ----------------------------------------------------
+            # Post processing
+            # ----------------------------------------------------
+            predictions = [
+                post_pred(post_sigmoid(prediction))
+                for prediction in prediction_lists
+            ]
+
+            # ----------------------------------------------------
+            # Calculate Dice
+            # ----------------------------------------------------
             acc_func.reset()
-            acc_func(y_pred = predictions, y = masks)
+
+            acc_func(
+                y_pred=predictions,
+                y=masks
+            )
+
             acc, not_nans = acc_func.aggregate()
-            run_acc.update(acc.cpu().numpy(), n = not_nans.cpu().numpy())
+
+            run_acc.update(
+                acc.cpu().numpy(),
+                n=not_nans.cpu().numpy()
+            )
+
+            # ====================================================
+            # PROGRESS INFORMATION
+            # ====================================================
+            current_batch = batch_idx + 1
+
+            percent = (
+                current_batch / total_batches
+            ) * 100
+
+            elapsed_seconds = time.time() - start_time
+
+            avg_time_per_batch = (
+                elapsed_seconds / current_batch
+            )
+
+            remaining_batches = (
+                total_batches - current_batch
+            )
+
+            remaining_seconds = (
+                avg_time_per_batch * remaining_batches
+            )
+
+            # ----------------------------------------------------
+            # Time formatting
+            # ----------------------------------------------------
+            elapsed_minutes = int(
+                elapsed_seconds // 60
+            )
+
+            elapsed_secs = int(
+                elapsed_seconds % 60
+            )
+
+            eta_minutes = int(
+                remaining_seconds // 60
+            )
+
+            eta_secs = int(
+                remaining_seconds % 60
+            )
+
+            # ====================================================
+            # PROGRESS BAR
+            # ====================================================
+            bar_length = 40
+
+            filled_length = int(
+                bar_length *
+                current_batch /
+                total_batches
+            )
+
+            bar = (
+                "█" * filled_length
+                +
+                "-" * (
+                    bar_length - filled_length
+                )
+            )
+
+            # ====================================================
+            # PRINT PROGRESS
+            # ====================================================
+            print(
+                f"\r[{bar}] "
+                f"{current_batch}/{total_batches} "
+                f"({percent:6.2f}%) "
+                f"Elapsed: "
+                f"{elapsed_minutes:02d}:{elapsed_secs:02d} "
+                f"ETA: "
+                f"{eta_minutes:02d}:{eta_secs:02d}",
+                end="",
+                flush=True
+            )
+
+    # ============================================================
+    # VALIDATION FINISHED
+    # ============================================================
+    end_time = time.time()
+    end_datetime = datetime.now()
+
+    total_seconds = end_time - start_time
+
+    total_hours = int(
+        total_seconds // 3600
+    )
+
+    total_minutes = int(
+        (total_seconds % 3600) // 60
+    )
+
+    total_secs = int(
+        total_seconds % 60
+    )
+
+    # ============================================================
+    # PRINT VALIDATION SUMMARY
+    # ============================================================
+    print()
+    print()
+    print("=" * 80)
+    print("VALIDATION COMPLETED")
+    print("=" * 80)
+
+    print(
+        "Start time :",
+        start_datetime.strftime("%Y-%m-%d %H:%M:%S")
+    )
+
+    print(
+        "Finish time:",
+        end_datetime.strftime("%Y-%m-%d %H:%M:%S")
+    )
+
+    print(
+        "Total time : "
+        f"{total_hours:02d}:"
+        f"{total_minutes:02d}:"
+        f"{total_secs:02d}"
+    )
+
+    print("=" * 80)
+    print()
+
     return run_acc.avg
 
 # Save trained results
@@ -252,7 +610,7 @@ def trainer(cfg,
             post_sigmoid = None,
             post_pred = None,
             post_label = None,
-            val_every = 2):
+            val_every = 1):
     """
     train and validate the model
 
@@ -313,7 +671,7 @@ def trainer(cfg,
             
             dices_tc.append(dice_tc)
             dices_et.append(dice_et)
-            dices_wt.append(dices_wt)
+            dices_wt.append(dice_wt)
             mean_dices.append(val_mean_acc)
             if val_mean_acc > val_acc_max:
                 val_acc_max = val_mean_acc
@@ -352,8 +710,8 @@ def run(cfg, model,
         post_sigmoid = None, 
         post_pred = None,
         post_label = None,
-        max_epochs = 100,
-        val_every = 2
+        max_epochs = 50,
+        val_every = 1
         ):
     '''Now train the model
     

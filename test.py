@@ -11,8 +11,10 @@ Date: 16.09.2024
 import pandas as pd
 import numpy as np
 import sys
+import time
 import matplotlib.pyplot as plt
 import torch
+from datetime import datetime, timedelta
 import torch.nn as nn
 from monai.data import decollate_batch
 from monai.handlers.utils import from_engine
@@ -98,54 +100,489 @@ def inference(model, input, batch_size, overlap):
 
 
 def test(args, data_loader, model):
-    """test the model on the test dataset"""
+    """Test the trained model on the test dataset."""
+
     metrics_dict = []
-    haussdor = HausdorffDistanceMetric(include_background=True, percentile=95)
-    meandice = DiceMetric(include_background=True)
+
+    haussdor = HausdorffDistanceMetric(
+        include_background=True,
+        percentile=95
+    )
+
+    meandice = DiceMetric(
+        include_background=True
+    )
+
     sw_bs = args.test.sw_batch
     infer_overlap = args.test.infer_overlap
-    for data in tqdm(data_loader):
+
+    total_batches = len(data_loader)
+
+    # ================================================================
+    # START TEST
+    # ================================================================
+
+    print("\n" + "=" * 80)
+    print("STARTING TEST")
+    print("=" * 80)
+
+    start_time = time.time()
+
+    print(
+        "Start time : " +
+        datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    )
+
+    print(f"Total test batches: {total_batches}")
+    print("Device: cuda")
+
+    if torch.cuda.is_available():
+        print(
+            "GPU: " +
+            torch.cuda.get_device_name(torch.cuda.current_device())
+        )
+    else:
+        print("GPU: CPU")
+
+    print("=" * 80)
+
+    # ================================================================
+    # PROGRESS BAR
+    # ================================================================
+
+    progress_bar = tqdm(
+        enumerate(data_loader),
+        total=total_batches,
+        ncols=100,
+        desc="Testing",
+        unit="batch"
+    )
+
+    # ================================================================
+    # TEST LOOP
+    # ================================================================
+
+    for batch_idx, data in progress_bar:
+
         patient_id = data["patient_id"][0]
-        inputs = data["image"]
-        targets = data["label"].cuda()
+
+        inputs = data["image"].cuda(non_blocking=True)
+        targets = data["label"].cuda(non_blocking=True)
+
         pad_list = data["pad_list"]
+
+        # IMPORTANT:
+        # This is the original non-zero bounding box BEFORE
+        # pad_or_crop_image()
         nonzero_indexes = data["nonzero_indexes"]
-        inputs = inputs.cuda()
+
+        # This tells us exactly where the 128x128x128 crop
+        # came from inside the original non-zero region.
+        box_slice = data["box_slice"]
+
         model.cuda()
-        with torch.no_grad():  
+        model.eval()
+
+        # ============================================================
+        # INFERENCE
+        # ============================================================
+
+        with torch.no_grad():
+
             if args.test.tta:
-                predict = torch.sigmoid(inference(model, inputs, batch_size=sw_bs, overlap=infer_overlap))
-                predict += torch.sigmoid(inference(model, inputs.flip(dims=(2,)).flip(dims=(2,)), batch_size=sw_bs, overlap=infer_overlap))
-                predict += torch.sigmoid(inference(model, inputs.flip(dims=(3,)).flip(dims=(3,)), batch_size=sw_bs, overlap=infer_overlap))
-                predict += torch.sigmoid(inference(model, inputs.flip(dims=(4,)).flip(dims=(4,)), batch_size=sw_bs, overlap=infer_overlap))
-                predict += torch.sigmoid(inference(model, inputs.flip(dims=(2, 3)).flip(dims=(2, 3)), batch_size=sw_bs, overlap=infer_overlap))
-                predict += torch.sigmoid(inference(model, inputs.flip(dims=(2, 4)).flip(dims=(2, 4)), batch_size=sw_bs, overlap=infer_overlap))
-                predict += torch.sigmoid(inference(model, inputs.flip(dims=(3, 4)).flip(dims=(3, 4)), batch_size=sw_bs, overlap=infer_overlap))
-                predict += torch.sigmoid(inference(model, inputs.flip(dims=(2, 3, 4)).flip(dims=(2, 3, 4)), batch_size=sw_bs, overlap=infer_overlap))
-                predict = predict / 8.0 
+
+                predict = torch.sigmoid(
+                    inference(
+                        model,
+                        inputs,
+                        batch_size=sw_bs,
+                        overlap=infer_overlap
+                    )
+                )
+
+                predict += torch.sigmoid(
+                    inference(
+                        model,
+                        inputs.flip(dims=(2,)).flip(dims=(2,)),
+                        batch_size=sw_bs,
+                        overlap=infer_overlap
+                    )
+                )
+
+                predict += torch.sigmoid(
+                    inference(
+                        model,
+                        inputs.flip(dims=(3,)).flip(dims=(3,)),
+                        batch_size=sw_bs,
+                        overlap=infer_overlap
+                    )
+                )
+
+                predict += torch.sigmoid(
+                    inference(
+                        model,
+                        inputs.flip(dims=(4,)).flip(dims=(4,)),
+                        batch_size=sw_bs,
+                        overlap=infer_overlap
+                    )
+                )
+
+                predict += torch.sigmoid(
+                    inference(
+                        model,
+                        inputs.flip(dims=(2, 3)).flip(dims=(2, 3)),
+                        batch_size=sw_bs,
+                        overlap=infer_overlap
+                    )
+                )
+
+                predict += torch.sigmoid(
+                    inference(
+                        model,
+                        inputs.flip(dims=(2, 4)).flip(dims=(2, 4)),
+                        batch_size=sw_bs,
+                        overlap=infer_overlap
+                    )
+                )
+
+                predict += torch.sigmoid(
+                    inference(
+                        model,
+                        inputs.flip(dims=(3, 4)).flip(dims=(3, 4)),
+                        batch_size=sw_bs,
+                        overlap=infer_overlap
+                    )
+                )
+
+                predict += torch.sigmoid(
+                    inference(
+                        model,
+                        inputs.flip(
+                            dims=(2, 3, 4)
+                        ).flip(
+                            dims=(2, 3, 4)
+                        ),
+                        batch_size=sw_bs,
+                        overlap=infer_overlap
+                    )
+                )
+
+                predict = predict / 8.0
+
             else:
-                predict = torch.sigmoid(inference(model, inputs, batch_size=sw_bs, overlap=infer_overlap))
-                
-        targets = targets[:, :, pad_list[-4]:targets.shape[2]-pad_list[-3], pad_list[-6]:targets.shape[3]-pad_list[-5], pad_list[-8]:targets.shape[4]-pad_list[-7]]
-        predict = predict[:, :, pad_list[-4]:predict.shape[2]-pad_list[-3], pad_list[-6]:predict.shape[3]-pad_list[-5], pad_list[-8]:predict.shape[4]-pad_list[-7]]
-        predict = (predict>0.5).squeeze()
+
+                predict = torch.sigmoid(
+                    inference(
+                        model,
+                        inputs,
+                        batch_size=sw_bs,
+                        overlap=infer_overlap
+                    )
+                )
+
+        # ============================================================
+        # REMOVE PADDING
+        # ============================================================
+
+        # pad_list structure created by pad_image_and_label():
+        #
+        # [right_x, left_x,
+        #  right_y, left_y,
+        #  right_z, left_z]
+        #
+        # Therefore:
+        #
+        # pad_list[-4] = left_z
+        # pad_list[-3] = right_z
+        # pad_list[-6] = left_y
+        # pad_list[-5] = right_y
+        # pad_list[-8] = left_x
+        # pad_list[-7] = right_x
+
+        z_pad_left = pad_list[-4]
+        z_pad_right = pad_list[-3]
+
+        y_pad_left = pad_list[-6]
+        y_pad_right = pad_list[-5]
+
+        x_pad_left = pad_list[-8]
+        x_pad_right = pad_list[-7]
+
+        # Remove padding from prediction
+        predict = predict[
+            :,
+            :,
+            z_pad_left:predict.shape[2] - z_pad_right,
+            y_pad_left:predict.shape[3] - y_pad_right,
+            x_pad_left:predict.shape[4] - x_pad_right
+        ]
+
+        # Remove padding from target
+        targets = targets[
+            :,
+            :,
+            z_pad_left:targets.shape[2] - z_pad_right,
+            y_pad_left:targets.shape[3] - y_pad_right,
+            x_pad_left:targets.shape[4] - x_pad_right
+        ]
+
+        # ============================================================
+        # CONVERT TO BINARY
+        # ============================================================
+
+        predict = (predict > 0.5).squeeze()
         targets = targets.squeeze()
-        dice_metrics = cal_dice(predict, targets, haussdor, meandice)
-        confuse_metric = cal_confuse(predict, targets, patient_id)
-        et_dice, tc_dice, wt_dice = dice_metrics[0], dice_metrics[1], dice_metrics[2]
-        et_hd, tc_hd, wt_hd = dice_metrics[3], dice_metrics[4], dice_metrics[5]
-        et_sens, tc_sens, wt_sens = get_value(confuse_metric[0][0]), get_value(confuse_metric[1][0]), get_value(confuse_metric[2][0])
-        et_spec, tc_spec, wt_spec = get_value(confuse_metric[0][1]), get_value(confuse_metric[1][1]), get_value(confuse_metric[2][1])
-        metrics_dict.append(dict(id=patient_id,
-            et_dice=et_dice, tc_dice=tc_dice, wt_dice=wt_dice, 
-            et_hd=et_hd, tc_hd=tc_hd, wt_hd=wt_hd,
-            et_sens=et_sens, tc_sens=tc_sens, wt_sens=wt_sens,
-            et_spec=et_spec, tc_spec=tc_spec, wt_spec=wt_spec))
-        full_predict = np.zeros((155, 240, 240))
-        predict = reconstruct_label(predict)
-        full_predict[slice(*nonzero_indexes[0]), slice(*nonzero_indexes[1]), slice(*nonzero_indexes[2])] = predict
-        save_test_label(args, patient_id, full_predict)
+
+        # ============================================================
+        # CALCULATE METRICS
+        # ============================================================
+
+        dice_metrics = cal_dice(
+            predict,
+            targets,
+            haussdor,
+            meandice
+        )
+
+        confuse_metric = cal_confuse(
+            predict,
+            targets,
+            patient_id
+        )
+
+        et_dice, tc_dice, wt_dice = (
+            dice_metrics[0],
+            dice_metrics[1],
+            dice_metrics[2]
+        )
+
+        et_hd, tc_hd, wt_hd = (
+            dice_metrics[3],
+            dice_metrics[4],
+            dice_metrics[5]
+        )
+
+        et_sens = get_value(confuse_metric[0][0])
+        tc_sens = get_value(confuse_metric[1][0])
+        wt_sens = get_value(confuse_metric[2][0])
+
+        et_spec = get_value(confuse_metric[0][1])
+        tc_spec = get_value(confuse_metric[1][1])
+        wt_spec = get_value(confuse_metric[2][1])
+
+        metrics_dict.append(
+            dict(
+                id=patient_id,
+
+                et_dice=et_dice,
+                tc_dice=tc_dice,
+                wt_dice=wt_dice,
+
+                et_hd=et_hd,
+                tc_hd=tc_hd,
+                wt_hd=wt_hd,
+
+                et_sens=et_sens,
+                tc_sens=tc_sens,
+                wt_sens=wt_sens,
+
+                et_spec=et_spec,
+                tc_spec=tc_spec,
+                wt_spec=wt_spec
+            )
+        )
+
+        # ============================================================
+        # CORRECT PREDICTION RECONSTRUCTION
+        # ============================================================
+
+        # Original MRI size is:
+        # (155, 240, 240)
+        #
+        # nonzero_indexes gives the bounding box of the non-zero
+        # MRI region BEFORE the random crop.
+        #
+        # Example:
+        # target region = (136, 175, 134)
+        #
+        # But prediction is only (128,128,128).
+        #
+        # box_slice tells us where the 128 crop was taken from
+        # inside that 136x175x134 region.
+        # ============================================================
+
+        predict_label = reconstruct_label(predict)
+
+        # Convert tensor to numpy
+        if torch.is_tensor(predict_label):
+            predict_label = predict_label.detach().cpu().numpy()
+
+        predict_label = np.asarray(predict_label)
+
+        # Remove unnecessary dimensions
+        predict_label = np.squeeze(predict_label)
+
+        # Original full BraTS volume
+        full_predict = np.zeros(
+            (155, 240, 240),
+            dtype=np.uint8
+        )
+
+        # ------------------------------------------------------------
+        # Read crop location
+        # ------------------------------------------------------------
+
+        zmin, zmax = nonzero_indexes[0]
+        ymin, ymax = nonzero_indexes[1]
+        xmin, xmax = nonzero_indexes[2]
+
+        # box_slice contains:
+        #
+        # [(z_start,z_end),
+        #  (y_start,y_end),
+        #  (x_start,x_end)]
+        #
+        # These are relative to the non-zero cropped region.
+
+        z_slice = box_slice[0]
+        y_slice = box_slice[1]
+        x_slice = box_slice[2]
+
+        z_start = int(zmin) + int(z_slice[0])
+        z_end   = int(zmin) + int(z_slice[1])
+
+        y_start = int(ymin) + int(y_slice[0])
+        y_end   = int(ymin) + int(y_slice[1])
+
+        x_start = int(xmin) + int(x_slice[0])
+        x_end   = int(xmin) + int(x_slice[1])
+
+        # ------------------------------------------------------------
+        # Check that prediction matches destination
+        # ------------------------------------------------------------
+
+        target_shape = (
+            z_end - z_start,
+            y_end - y_start,
+            x_end - x_start
+        )
+
+        prediction_shape = predict_label.shape
+
+        if prediction_shape != target_shape:
+
+            print("\n[INFO] Prediction reconstruction shape mismatch")
+            print(f"[INFO] Patient           : {patient_id}")
+            print(f"[INFO] Prediction shape  : {prediction_shape}")
+            print(f"[INFO] Target shape      : {target_shape}")
+            print(f"[INFO] box_slice         : {box_slice}")
+            print(f"[INFO] nonzero_indexes   : {nonzero_indexes}")
+
+            # Safely crop both to the common dimensions
+            common_z = min(prediction_shape[0], target_shape[0])
+            common_y = min(prediction_shape[1], target_shape[1])
+            common_x = min(prediction_shape[2], target_shape[2])
+
+            predict_label = predict_label[
+                :common_z,
+                :common_y,
+                :common_x
+            ]
+
+            z_end = z_start + common_z
+            y_end = y_start + common_y
+            x_end = x_start + common_x
+
+        # ------------------------------------------------------------
+        # PUT PREDICTION BACK INTO ORIGINAL 155x240x240 VOLUME
+        # ------------------------------------------------------------
+
+        full_predict[
+            z_start:z_end,
+            y_start:y_end,
+            x_start:x_end
+        ] = predict_label.astype(np.uint8)
+
+        # ============================================================
+        # SAVE SEGMENTATION
+        # ============================================================
+
+        save_test_label(
+            args,
+            patient_id,
+            full_predict
+        )
+
+        # ============================================================
+        # UPDATE PROGRESS BAR
+        # ============================================================
+
+        elapsed = time.time() - start_time
+
+        completed = batch_idx + 1
+
+        if completed > 0:
+            avg_time = elapsed / completed
+            remaining = avg_time * (total_batches - completed)
+        else:
+            remaining = 0
+
+        elapsed_min = int(elapsed // 60)
+        elapsed_sec = int(elapsed % 60)
+
+        eta_min = int(remaining // 60)
+        eta_sec = int(remaining % 60)
+
+        progress_bar.set_postfix(
+            {
+                "Elapsed": f"{elapsed_min:02d}:{elapsed_sec:02d}",
+                "ETA": f"{eta_min:02d}:{eta_sec:02d}"
+            },
+            refresh=True
+        )
+
+    # ================================================================
+    # TEST COMPLETED
+    # ================================================================
+
+    total_time = time.time() - start_time
+
+    hours = int(total_time // 3600)
+    minutes = int((total_time % 3600) // 60)
+    seconds = int(total_time % 60)
+
+    finish_time = datetime.now().strftime(
+        "%Y-%m-%d %H:%M:%S"
+    )
+
+    print("\n")
+    print("=" * 80)
+    print("TEST COMPLETED")
+    print("=" * 80)
+
+    print(
+        "Start time : " +
+        datetime.fromtimestamp(start_time).strftime(
+            "%Y-%m-%d %H:%M:%S"
+        )
+    )
+
+    print("Finish time: " + finish_time)
+
+    print(
+        f"Total time : "
+        f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+    )
+
+    print("=" * 80)
+
+    # ================================================================
+    # SAVE CSV
+    # ================================================================
+
     save_seg_csv(metrics_dict, args)
+
+    print("\nTest results saved successfully.")
     
 @hydra.main(config_name='configs', config_path= 'conf', version_base=None)
 def main(cfg: DictConfig):
@@ -171,7 +608,7 @@ def main(cfg: DictConfig):
                           out_channels=num_classes, 
                           dropout_prob=0.2, 
                           blocks_down=(1, 2, 2, 4), 
-                          blocks_up=(1, 1, 1)).to(device),
+                          blocks_up=(1, 1, 1)).to(device)
     # UNet
     elif cfg.model.architecture == "unet3d":
         model = UNet3D(in_channels=in_channels, 

@@ -1,0 +1,8 @@
+- dataset.laptop_pc=C:\Users\chand\BrainTumorProject\dataset
+- training.my_pc=true
+- training.irl=false
+- training.colab=false
+- training.sines=false
+- training.max_epochs=1
+- training.batch_size=1
+- training.num_workers=0

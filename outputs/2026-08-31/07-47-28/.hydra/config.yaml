@@ -1,0 +1,43 @@
+model:
+  roi: 96
+  infer_overlap: 0.6
+  architecture: segres_net
+dataset:
+  irl_pc: C:/Users/chand/BrainTumorProject/dataset
+  laptop_pc: C:/Users/chand/BrainTumorProject/dataset
+  colab: /gdrive/MyDrive/BraTS2023/
+  sines_pc: /drive/faizanai.rrl/datasets
+  dataset_folder: null
+  version: brats2023
+  type: brats
+  patient_id: C:/Users/chand/BrainTumorProject/dataset/brats2023
+  save_dir: paper_figs/exp1/modalities
+training:
+  batch_size: 1
+  num_workers: 12
+  infer_overlap: 0.6
+  learning_rate: 0.0001
+  max_epochs: 300
+  sw_batch_size: 2
+  val_every: 1
+  weight_decay: 1.0e-05
+  solver_name: Adam
+  loss_type: dice
+  pretrained: false
+  resume: false
+  exp_name: segres_net_runs
+  seed: 123
+  colab: false
+  irl: true
+  sines: false
+  my_pc: false
+  new_max_epochs: None
+test:
+  weights: C:/Users/chand/BrainTumorProject/Brain-Tumors-Segmentation/segres_net_runs/best-model/best-model.pkl
+  tta: true
+  sw_batch: 2
+  batch: 1
+  infer_overlap: 0.6
+  workers: 0
+  csv_folder: csv
+  label_folder: test_predictions
